@@ -24,7 +24,20 @@ Give your agent https://spread.bahnexpress.com/llms.txt.
 
 ## How you win
 
-Ranking rounds open from Friday 19:30. Every team plays the same secret weeks, so the leaderboard shows you where you stand. Our own best system plays every round. Beat it.
+Ranking rounds open from Friday 19:30. The organisers start each round and name it, for example "Friday 20:01". A round is five secret worlds at each level, the same worlds for every team. You play them in order, each once. A world you have played stays on that round, and deleting it still counts. When the next round starts, its five worlds are new. The board shows the current round and the previous one. Our own best system plays every round.
+
+These rounds are practice. The Sunday final is a separate board: one secret level-8 week, and that margin is what puts a ranked team in the top 10.
+
+## Where to start
+
+From the public "How it works" page. Where that page and the rules differ, the rules are correct. Up to level 3, sending no quote is how you decline, and it costs nothing. From level 4, decline with a price far above the list price. A request you leave unanswered makes that dealer a little less willing to accept your prices.
+
+- Choose the cars. A driver who lives near the delivery is cheap. A same-day car to the far north is not. You do not have to win every car.
+- Learn during the week. The competitor's prices change, and they react to the cars you win.
+- Post the fee in time. A raise that comes late usually finds nobody, and drivers wait when they expect the fee to rise.
+- Put two cars on one gig when one driver is already nearby. One gig can hold several cars and at most 12 hours of driving.
+- Read the notes. The world follows a note whether the system reads it or not.
+- Compare two versions on the same 10 or 20 practice seeds. One week is noisy.
 
 The final is on Sunday at 08:00. Every team plays its own copy of one secret week, which runs by itself for about 34 minutes. Registration closes at 07:30.
 

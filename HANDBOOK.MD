@@ -222,7 +222,7 @@ Each event has `seq`, `at`, the world minute, and `kind`. This table says when e
 - `places`: `id`, `name`, `lat` and `lon`.
 - `roads`: `from`, `to`, `km` and `minutes` by car, for every pair of places in both directions and from each place to itself.
 
-The 12-hour rule and `lastPickupAt` use these minutes. The real driving time of a gig varies around them, and snow makes it longer. Public transport times are not published.
+The 12-hour rule and `lastPickupAt` use these minutes. The real driving time of a gig varies around them, and snow makes it longer. Public transport times are not published. As a scale: Helsinki to Tampere is about 2 hours, and Helsinki to Oulu about 6.5.
 
 ## How the world works
 

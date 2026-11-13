@@ -1,10 +1,10 @@
 """A practice dispatch policy on top of the starter.
 
 At levels 1–3 the dealer ignores the price and every quote wins the first option,
-so a car is declined by sending no quote. Two kinds of car get no quote: the typical
-fee is already above the list price, or a same-day car whose drive leaves under four
-hours before the deadline. Those same-day cars arrive late often enough to give the
-price back.
+so a car is declined by sending no quote. A car gets no quote when the typical
+fee is already above the list price, when a same-day drive leaves under four hours
+before the deadline, when a same-day drive is 7.5 hours or more, or, at levels 1 and 2,
+when the request is a trade-in. A trade-in that never leaves costs twice its price.
 
 Up to level 6 the typical fee is enough for most gigs. One fee, with a single small
 step after the deadline warning, does not teach drivers to wait for the hourly ladder.
@@ -26,7 +26,9 @@ class Desk(StarterDesk):
         self.requests[request["id"]] = request
         first = request["options"][0]
         price = first["listPriceCents"]
-        if self.level <= 3 and (request["referenceFeeCents"] > price or self.same_day_too_tight(request, first["deadline"])):
+        if self.level <= 2 and len(request["legs"]) > 1:
+            return
+        if self.level <= 3 and (request["referenceFeeCents"] > price or self.same_day_too_tight(request, first["deadline"]) or self.same_day_too_long(request)):
             return
         self.outbox.append({"type": "quote", "requestId": request["id"], "prices": {first["kind"]: price}})
 
@@ -36,6 +38,13 @@ class Desk(StarterDesk):
             return False
         drive = sum(self.drive_minutes.get((leg["pickup"]["placeId"], leg["delivery"]["placeId"]), 0) for leg in request["legs"])
         return deadline - request["arrivedAt"] - drive < 4 * 60
+
+    def same_day_too_long(self, request: PriceRequest) -> bool:
+        """A same-day drive of 7.5 hours or more arrives late often enough to wipe the price."""
+        if request["options"][0]["kind"] != "same_day":
+            return False
+        drive = sum(self.drive_minutes.get((leg["pickup"]["placeId"], leg["delivery"]["placeId"]), 0) for leg in request["legs"])
+        return drive >= 450
 
     def fees_for(self, order: Order, cars: int) -> list[FeeStep]:
         if self.level >= 7:

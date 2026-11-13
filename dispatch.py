@@ -45,6 +45,14 @@ class Params:
     markup_next_day: float = 1.45
     markup_3_days: float = 1.45
     decline_factor: float = 20.0  # a decline is a quote this many times the list price: it never wins
+    # Price learning (see Pricing), from level 4. Off: every quote is list price x markup. On 8 level 8 weeks,
+    # learning + trust with a 1.3 floor lifted the worst week from 92.6% to 95.6% on time and the mean margin by ~6%.
+    price_learn: bool = True
+    price_up: float = 0.03  # a win raises the dealer's and the week's price level by this share
+    price_down: float = 0.02  # a loss lowers them by this share (see Pricing for the win share this aims at)
+    price_min: float = 1.30
+    price_max: float = 1.90
+    trust: bool = True  # level 8: +1% on a dealer's prices for each order delivered to it on time, up to 25
     # Limits tuned for level 8's driver shortage; the same at every level, since only level 8 counts.
     max_drive_min: int = 180  # decline when a leg's drive is longer than this (3-5 h drives: ~30% late at level 8)
     max_backlog: int = 10  # decline while this many won or likely-won orders have no driver
@@ -163,6 +171,48 @@ class Supply:
         return (b + k * self.prior(place)) / (b + f + k)
 
 
+class Pricing:
+    """The price level that each dealer accepts from us, learned from our own wins and losses.
+
+    The competitor's price is the list price times a level for the week (26-54% above list at level 8),
+    a factor for the lane, one for the day, and noise, and it answers our wins. We never see it, only
+    whether each quote won. So each dealer gets a multiplier of the list price: a win raises it by
+    `price_up`, a loss lowers it by `price_down`. In the long run that wins about
+    price_down / (price_up + price_down) of the quotes we want, at the highest price that does. A dealer we
+    have not quoted yet starts from the week's level, which learns from every dealer the same way.
+    Only quotes meant to win count: a decline at 20x the list price says nothing.
+
+    Dealer trust (level 8): each dealer accepts 1% more from us for each order delivered to it on time,
+    up to 25; a late order halves its count."""
+
+    def __init__(self, params: Params):
+        self.params = params
+        start = params.markup_same_day
+        self.week = start
+        self.dealer: dict[str, float] = {}
+        self.on_time: dict[str, int] = {}
+
+    def level(self, dealer: str) -> float:
+        return self.dealer.get(dealer, self.week)
+
+    def trust_factor(self, dealer: str) -> float:
+        return 1 + 0.01 * self.on_time.get(dealer, 0) if self.params.trust else 1.0
+
+    def multiplier(self, dealer: str) -> float:
+        return self.level(dealer) * self.trust_factor(dealer)
+
+    def learn(self, dealer: str, won: bool) -> None:
+        p = self.params
+        step = (1 + p.price_up) if won else (1 - p.price_down)
+        clamp = lambda x: min(p.price_max, max(p.price_min, x))
+        self.dealer[dealer] = clamp(self.level(dealer) * step)
+        self.week = clamp(self.week * step)
+
+    def delivered(self, dealer: str, on_time: bool) -> None:
+        count = self.on_time.get(dealer, 0)
+        self.on_time[dealer] = min(25, count + 1) if on_time else count // 2
+
+
 class Retry(NamedTuple):
     """How to post a leg again after a failed visit."""
     pickup_from: int = 0
@@ -181,6 +231,7 @@ class Desk:
         self.pending: set[str] = set()  # requests quoted to win, not yet decided
         self.declined = 0
         self.supply = Supply(self.geo, self.params)
+        self.pricing = Pricing(self.params)
         self.gig_place: dict[str, str] = {}  # gig id -> its first pickup place
         self.pair_gigs: dict[str, int] = {}  # open two-car gig id -> the minute it was posted
         self.pair_posts: set[int] = set()  # id() of the pair posts in the outbox
@@ -252,9 +303,13 @@ class Desk:
         if event["kind"] == "price_request":
             self.quote(event["request"])
         elif event["kind"] == "order_won":
+            if event["order"]["id"] in self.pending:
+                self.pricing.learn(event["order"]["dealerId"], True)
             self.pending.discard(event["order"]["id"])
             self.win(event["order"])
         elif event["kind"] == "order_lost":
+            if event["requestId"] in self.pending and event["requestId"] in self.requests:
+                self.pricing.learn(self.requests[event["requestId"]]["dealerId"], False)
             self.pending.discard(event["requestId"])
         elif event["kind"] == "order_changed":
             self.change(event["order"])
@@ -293,7 +348,10 @@ class Desk:
     def delivered(self, order_id: str, leg: int, at: int) -> None:
         self.leg_gigs.get(order_id, {}).pop(leg, None)
         if order_id in self.orders:
-            self.orders[order_id]["deliveredAt"][leg] = at
+            order = self.orders[order_id]
+            order["deliveredAt"][leg] = at
+            if not undelivered(order):  # the last car: the order counts for the dealer's trust
+                self.pricing.delivered(order["dealerId"], max(order["deliveredAt"]) <= order["deadline"])
 
     def quote(self, request: PriceRequest) -> None:
         self.requests[request["id"]] = request
@@ -308,8 +366,7 @@ class Desk:
             first = request["options"][0]
             prices = {first["kind"]: first["listPriceCents"]}
         else:
-            markup = {"same_day": self.params.markup_same_day, "next_day": self.params.markup_next_day,
-                      "within_3_days": self.params.markup_3_days}
+            markup = self.markups(request)
             prices = {o["kind"]: int(o["listPriceCents"] * markup[o["kind"]] + 0.5) for o in request["options"]}
         self.pending.add(request["id"])
         self.outbox.append({"type": "quote", "requestId": request["id"], "prices": prices})
@@ -353,9 +410,16 @@ class Desk:
         quote wins; from level 4 the dearest option at our markup."""
         if self.level <= 3:
             return request["options"][0]["listPriceCents"]
-        markup = {"same_day": self.params.markup_same_day, "next_day": self.params.markup_next_day,
-                  "within_3_days": self.params.markup_3_days}
+        markup = self.markups(request)
         return max(o["listPriceCents"] * markup[o["kind"]] for o in request["options"])
+
+    def markups(self, request: PriceRequest) -> dict[str, float]:
+        """The multiple of the list price for each option: learned per dealer, or the fixed markups."""
+        p = self.params
+        if p.price_learn or p.trust:
+            m = self.pricing.multiplier(request["dealerId"]) if p.price_learn else p.markup_same_day * self.pricing.trust_factor(request["dealerId"])
+            return {"same_day": m, "next_day": m, "within_3_days": m}
+        return {"same_day": p.markup_same_day, "next_day": p.markup_next_day, "within_3_days": p.markup_3_days}
 
     def local_backlog(self, place: str) -> int:
         """The cars that wait for a driver, or may still be won, with a pickup within home_km of `place`."""
@@ -922,7 +986,8 @@ def main() -> None:
                 if args.json:
                     score = world.score()
                     print(json.dumps({"world": world.id, "level": args.level, "seed": args.seed, "params": asdict(params),
-                                      "declined": desk.declined, "paired": desk.paired, **score}), flush=True)
+                                      "declined": desk.declined, "paired": desk.paired,
+                                      "price_week": round(desk.pricing.week, 3), **score}), flush=True)
                     return
             except BaseException as error:  # a world left behind holds one of the team's eight practice slots
                 try:

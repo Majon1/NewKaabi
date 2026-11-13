@@ -114,7 +114,7 @@ Up to level 3 every quote wins, so a car is refused by sending no quote. From le
 
 **Pairing cars.** When a car is won, the system looks for one of our waiting cars that starts within 50 km of where the new car ends, or ends near where it starts (`pair_near_km`). If one driver can take both with both deadlines holding (2 hours to spare), it posts them as one gig at 85% of the two typical fees (`pair_fee_share`), since the driver saves a trip. A same-day car never waits for its partner; another car waits at most 2 hours. A pair that nobody books within an hour, or that gets a deadline warning, expires, or is cancelled or changed, goes back to one gig per car. On 8 level 8 weeks this added about €300 a week, better on every week.
 
-**What to quote.** Up to level 3, the list price of the first option. From level 4, every option at the list price times a markup (`markup_*`, default 1.45; it beat 1.3 on all 8 level 8 test weeks). At level 8 the competitor is 26–54% above the list price.
+**What to quote.** Up to level 3, the list price of the first option. From level 4, the price is learned during the week (`price_learn`): each dealer gets a multiple of the list price, starting at 1.45. A win raises it by 3% and a loss lowers it by 2%, within 1.3–1.9 (`price_up`, `price_down`, `price_min`, `price_max`). A dealer we have not quoted yet starts from the week's level, which learns from every dealer. Declines do not count as losses. On top, dealer trust (`trust`): +1% on a dealer's prices for each order delivered to it on time, up to 25%; a late order halves the count. With learning off, every option is the list price times a fixed markup (`markup_*`, 1.45). At level 8 the competitor is 26–54% above the list price.
 
 **What to pay the driver.** Up to level 6: one fee, at the typical fee, and one step of 15% after the deadline warning. This does not teach drivers to wait for raises. Levels 7 and 8: a rising fee schedule (`fee_open`, `fee_rise`, `fee_every`, `fee_cap`), and a steeper one after the deadline warning (`steep_*`), because a typical fee often finds no driver there.
 
@@ -124,7 +124,7 @@ Up to level 3 every quote wins, so a car is refused by sending no quote. From le
 |---|---|---|---|
 | 1 | spread-1 | €4,509 | 97.1% |
 | 2 | spread-1, setup-check, harness-3 | €4,600–5,600 | 97.1% |
-| 8 | tune-1 … tune-8 (current defaults) | €3,260–5,900, mean €4,462 | 92.0% (8 of 8 ranked) |
+| 8 | tune-1 … tune-8 (current defaults) | €3,680–7,730, mean €6,125 | 95.6% (8 of 8 ranked) |
 
 The starter loses €72,612 at level 8 on spread-1, at 45.5% on time. At level 8 we want at least 93% on every week for a safety margin; the next step is learning, during the week, which towns lack drivers.
 
@@ -139,5 +139,6 @@ Level 8 settings compared on the same 8 weeks:
 | 4 h drives, `max_backlog=12` | 7 of 8 | 86.0% | €4,003 |
 | + decline towns where gigs do not book (`min_supply=0.5`) | 8 of 8 | 92.2% | €4,154 |
 | + pairing within 50 km | 8 of 8 | 92.0% | €4,462 |
-| **+ quotes at 1.45× list instead of 1.3× (current default)** | **8 of 8** | **92.6%** | **€5,769** |
+| + quotes at 1.45× list instead of 1.3× | 8 of 8 | 92.6% | €5,769 |
 | same, quotes at 1.6× list | 8 of 8 | 94.9% | €5,358 (€8,226 in a dear week, €2,685 in a cheap one) |
+| **+ price learning per dealer and dealer trust, floor 1.3× (current default)** | **8 of 8** | **95.6%** | **€6,125** |

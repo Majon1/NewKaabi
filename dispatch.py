@@ -32,16 +32,18 @@ from spread.types import (
 HOUR, DAY = 60, 24 * 60
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 # The events that need an answer. Views and account lines arrive with the next event that needs an answer.
-WAKE_ON: list[DeskEventKind] = ["price_request", "order_won", "order_changed", "order_cancelled", "visit_failed", "gig_expired", "deadline_close"]
+WAKE_ON: list[DeskEventKind] = ["price_request", "order_won", "order_changed", "order_cancelled", "visit_failed", "gig_expired", "deadline_close",
+                                "gig_dropped", "no_show", "driver_late"]
 
 
 @dataclass
 class Params:
     """The knobs of the strategy. `--param name=value` overrides one, so a sweep can compare settings."""
     # Quoting: the price of each option is its list price times the markup of its kind.
-    markup_same_day: float = 1.30
-    markup_next_day: float = 1.30
-    markup_3_days: float = 1.30
+    # 1.45 beat 1.30 on all 8 level 8 test weeks (+29% margin); 1.60 won big in dear weeks and lost in cheap ones.
+    markup_same_day: float = 1.45
+    markup_next_day: float = 1.45
+    markup_3_days: float = 1.45
     decline_factor: float = 20.0  # a decline is a quote this many times the list price: it never wins
     # Limits tuned for level 8's driver shortage; the same at every level, since only level 8 counts.
     max_drive_min: int = 180  # decline when a leg's drive is longer than this (3-5 h drives: ~30% late at level 8)
@@ -63,6 +65,12 @@ class Params:
     pair_book_min: int = 60  # we expect a driver to start no sooner than this after posting
     pair_fee_share: float = 0.85  # the pair's typical fee is this share of the two cars' typical fees
     pair_timeout_min: int = 60  # a pair that no driver books in this time goes back to one gig per car
+    # After a driver drops a gig or does not show (see Desk.after_drop) and when a driver will be late.
+    # Off: on 8 level 8 weeks it lifted the worst week's on-time share by ~0.6 points but cost ~EUR 120 a week.
+    drop_react: bool = False  # False keeps the starter's behaviour: the gig goes back with its old schedule
+    drop_urgent_min: int = 360  # with less than this left to the last safe pickup, go straight to the steep fees
+    drop_bump: float = 0.10  # otherwise restart the rising fees from the fee then shown plus this share of the typical fee
+    late_release_min: int = 120  # release a late driver whose car would arrive late, if this long is left to find another
     # Up to this level, a gig gets one fee, and one small step after the deadline warning: up to level 6
     # the typical fee books most gigs, and a single fee does not teach drivers to wait for raises.
     flat_fee_max_level: int = 6
@@ -90,7 +98,13 @@ def parse_params(pairs: list[str]) -> Params:
         name, _, value = pair.partition("=")
         if not hasattr(params, name):
             raise SystemExit(f"Unknown parameter {name!r}. Known: {', '.join(vars(params))}")
-        setattr(params, name, type(getattr(params, name))(value))
+        kind = type(getattr(params, name))
+        if kind is bool:  # bool("False") is True, so read the word
+            if value.lower() not in ("true", "false", "1", "0", "yes", "no"):
+                raise SystemExit(f"Parameter {name} takes true or false, not {value!r}")
+            setattr(params, name, value.lower() in ("true", "1", "yes"))
+        else:
+            setattr(params, name, kind(value))
     return params
 
 
@@ -268,6 +282,11 @@ class Desk:
             self.booked.add(event["gigId"])
         elif event["kind"] in ("gig_dropped", "no_show"):  # after a no-show the gig is open again; a late driver still comes
             self.booked.discard(event["gigId"])
+            if self.params.drop_react:
+                self.after_drop(event["gigId"])
+        elif event["kind"] == "driver_late":
+            if self.params.drop_react:
+                self.after_late(event["gigId"], event["pickupAt"])
         elif event["kind"] == "delivered":
             self.delivered(event["orderId"], event["leg"], event["at"])
 
@@ -472,6 +491,73 @@ class Desk:
                 legs.pop(leg)
             order = self.orders.get(order_id)
             if order is not None and undelivered(order) and not self.gigs_of(order_id):
+                self.post(order, undelivered(order))
+
+    # ---- Drops, no-shows and late drivers ----
+
+    def after_drop(self, gig_id: str) -> None:
+        """The gig is open again. A driver who gave it back takes it again only for more, and its old schedule
+        may already be at its top. Close to the last safe pickup: the steep fees at once. Otherwise: a fresh
+        rising schedule from the fee then shown plus a bump. A pair goes back to one gig per car."""
+        action = self.posts.get(gig_id)
+        if action is None or gig_id not in self.gigs_of(action["stops"][0]["orderId"]):
+            return
+        if self.carries_two(gig_id):
+            self.split(gig_id)
+            return
+        order = self.orders.get(action["stops"][0]["orderId"])
+        if order is None or not undelivered(order):
+            return
+        p, cars = self.params, pickups(action)
+        if order["lastPickupAt"] - self.now < p.drop_urgent_min:
+            self.urgent.add(order["id"])
+            fees = self.fees_for(order, cars)
+        else:
+            base = self.requests[order["id"]]["referenceFeeCents"] * cars / len(order["legs"])
+            shown = max([s["feeCents"] for s in action["schedule"] if s["at"] <= self.now] or [action["schedule"][0]["feeCents"]])
+            start = shown / base + p.drop_bump
+            if self.level <= p.flat_fee_max_level:
+                fees = [{"at": self.now, "feeCents": max(1, int(base * start + 0.5))}]
+            else:
+                fees = schedule(self.now, base, self.level, start, p.fee_rise, p.fee_every, max(p.fee_cap, start))
+        self.outbox.append({"type": "reprice", "gigId": gig_id, "schedule": fees})
+        self.posts[gig_id] = {**action, "schedule": fees}
+
+    def after_late(self, gig_id: str, pickup_at: int) -> None:
+        """A booked driver will collect the first car late. Keep them unless the cars would then arrive late
+        and there is still time to find another driver: then release them (free after driver_late) and post
+        the cars again at the steep fees."""
+        action = self.posts.get(gig_id)
+        if action is None or gig_id not in self.booked:
+            return
+        order_ids = list(dict.fromkeys(s["orderId"] for s in action["stops"]))
+        orders = [self.orders[o] for o in order_ids if o in self.orders]
+        if not orders:
+            return
+        # When the driver's cars would arrive, by the road minutes from the late pickup.
+        at, place, late = pickup_at, None, False
+        for stop in action["stops"]:
+            order = self.orders.get(stop["orderId"])
+            if order is None:
+                continue
+            leg = order["legs"][stop["leg"]]
+            here = leg["pickup"]["placeId"] if stop["kind"] == "pickup" else leg["delivery"]["placeId"]
+            if place is not None:
+                at += self.geo.minutes.get((place, here), 0)
+            place = here
+            if stop["kind"] == "delivery" and at > order["deadline"]:
+                late = True
+        if not late or min(o["lastPickupAt"] for o in orders) - self.now < self.params.late_release_min:
+            return
+        self.outbox.append({"type": "release", "gigId": gig_id})
+        self.booked.discard(gig_id)
+        self.pair_gigs.pop(gig_id, None)
+        for order in orders:
+            self.urgent.add(order["id"])
+            legs = self.leg_gigs.get(order["id"], {})
+            for leg in [leg for leg, g in legs.items() if g == gig_id]:
+                legs.pop(leg)
+            if undelivered(order) and not self.gigs_of(order["id"]):
                 self.post(order, undelivered(order))
 
     def tick(self) -> None:

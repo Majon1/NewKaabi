@@ -114,7 +114,7 @@ Up to level 3 every quote wins, so a car is refused by sending no quote. From le
 
 **Pairing cars.** When a car is won, the system looks for one of our waiting cars that starts within 50 km of where the new car ends, or ends near where it starts (`pair_near_km`). If one driver can take both with both deadlines holding (2 hours to spare), it posts them as one gig at 85% of the two typical fees (`pair_fee_share`), since the driver saves a trip. A same-day car never waits for its partner; another car waits at most 2 hours. A pair that nobody books within an hour, or that gets a deadline warning, expires, or is cancelled or changed, goes back to one gig per car. On 8 level 8 weeks this added about €300 a week, better on every week.
 
-**What to quote.** Up to level 3, the list price of the first option. From level 4, every option at the list price times a markup (`markup_*`, default 1.3). At level 8 the competitor is 26–54% above the list price.
+**What to quote.** Up to level 3, the list price of the first option. From level 4, every option at the list price times a markup (`markup_*`, default 1.45; it beat 1.3 on all 8 level 8 test weeks). At level 8 the competitor is 26–54% above the list price.
 
 **What to pay the driver.** Up to level 6: one fee, at the typical fee, and one step of 15% after the deadline warning. This does not teach drivers to wait for raises. Levels 7 and 8: a rising fee schedule (`fee_open`, `fee_rise`, `fee_every`, `fee_cap`), and a steeper one after the deadline warning (`steep_*`), because a typical fee often finds no driver there.
 
@@ -138,4 +138,6 @@ Level 8 settings compared on the same 8 weeks:
 | 3 h drives, `max_backlog=10` | 8 of 8 | 91.7% | €4,057 |
 | 4 h drives, `max_backlog=12` | 7 of 8 | 86.0% | €4,003 |
 | + decline towns where gigs do not book (`min_supply=0.5`) | 8 of 8 | 92.2% | €4,154 |
-| **+ pairing within 50 km (current default)** | **8 of 8** | **92.0%** | **€4,462** |
+| + pairing within 50 km | 8 of 8 | 92.0% | €4,462 |
+| **+ quotes at 1.45× list instead of 1.3× (current default)** | **8 of 8** | **92.6%** | **€5,769** |
+| same, quotes at 1.6× list | 8 of 8 | 94.9% | €5,358 (€8,226 in a dear week, €2,685 in a cheap one) |

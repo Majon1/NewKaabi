@@ -236,6 +236,7 @@ class Desk:
         self.pair_gigs: dict[str, int] = {}  # open two-car gig id -> the minute it was posted
         self.pair_posts: set[int] = set()  # id() of the pair posts in the outbox
         self.paired = 0  # pairs posted this week
+        self.refused_quotes = 0  # quotes the world refused, mostly for coming too late
         self.outbox: list[Action] = []  # the actions decided since the starter last sent
         self.requests: dict[str, PriceRequest] = {}
         self.orders: dict[str, Order] = {}  # the orders won and not cancelled
@@ -277,6 +278,33 @@ class Desk:
             self.learn(event)
         for request in snapshot["openRequests"]:
             self.quote(request)
+
+    def save_state(self, path: str) -> None:
+        """Writes what the world's history cannot give back: the learned prices, dealer trust and the
+        quotes that still wait for an answer. A failed write is not worth stopping for."""
+        state = {"week": self.pricing.week, "dealer": self.pricing.dealer, "on_time": self.pricing.on_time,
+                 "pending": sorted(self.pending)}
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(state, f)
+            os.replace(path + ".tmp", path)
+        except OSError as error:
+            print(f"Could not save the desk's state: {error}", file=sys.stderr, flush=True)
+
+    def load_state(self, path: str) -> None:
+        """Reads what save_state wrote for this world, when a restarted system finds it."""
+        try:
+            with open(path, encoding="utf-8") as f:
+                state = json.load(f)
+        except (OSError, ValueError):
+            return
+        self.pricing.week = state.get("week", self.pricing.week)
+        self.pricing.dealer.update(state.get("dealer", {}))
+        self.pricing.on_time.update(state.get("on_time", {}))
+        # Only quotes still waiting: the answers to the others are in the history already.
+        self.pending |= {r for r in state.get("pending", []) if r in self.requests and self.requests[r]["respondBy"] > self.now}
+        print(f"Picked up the learned prices of {len(self.pricing.dealer)} dealers from {path}.", flush=True)
 
     def pickup_place(self, order_id: str, leg: int = 0) -> str:
         source = self.orders.get(order_id) or self.requests.get(order_id)
@@ -751,6 +779,10 @@ class Desk:
     def read_results(self, actions: list[Action], results: list[ActionResult]) -> None:
         """Remembers the gig of each post that the world accepted."""
         for action, result in zip(actions, results):
+            if action["type"] == "quote" and result["ok"] is not True:
+                self.refused_quotes += 1  # in the final, mostly a quote that came after the request's 15 minutes
+                if self.refused_quotes <= 3:
+                    print(f"Quote refused: {result.get('reason')}", file=sys.stderr, flush=True)
             pair = id(action) in self.pair_posts
             self.pair_posts.discard(id(action))
             if action["type"] == "post" and result["ok"] is True:
@@ -883,9 +915,24 @@ def play_practice(world: World, level: int, params: Optional[Params] = None, qui
     return desk
 
 
-def play_final(world: World, params: Params) -> None:
-    """Rebuilds the books, then answers events as they come. After a second without an event,
-    it reads the clock."""
+SEND_EVERY = 0.25  # real seconds: the longest an answer waits in the outbox while events keep coming
+CLOCK_EVERY = 1.0  # real seconds between two reads of the world clock while no event comes
+SAVE_EVERY = 5.0  # real seconds between two saves of what the desk has learned
+
+
+def state_path(world: World) -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs", f"state-{world.id}.json")
+
+
+def play_final(world: World, params: Params, clock=None) -> None:
+    """Rebuilds the books, then answers events as they come, with the world's clock moving by itself.
+
+    Answers are sent in batches: a burst of requests (a bulk order brings 30-40 at once) goes out in one
+    request of up to 50 actions instead of one round trip each, and a price request gives only about 4.5
+    real seconds. The outbox goes out at the latest SEND_EVERY seconds after it starts to fill, and at once
+    when the stream falls quiet. What the desk has learned (prices, dealer trust) is saved to a file every
+    few seconds, so a restart picks it up. `clock` reads the world minute; by default the final's clock."""
+    clock = clock or (lambda: world.client.final()["now"])
     history = world.events()
     snapshot = world.snapshot()
     if snapshot["now"] >= snapshot["endsAt"]:
@@ -893,18 +940,35 @@ def play_final(world: World, params: Params) -> None:
     level = next((w["level"] for w in world.client.worlds() if w["worldId"] == world.id), 8)
     desk = Desk(world, level, snapshot["now"], params)
     desk.rejoin(snapshot, history)
+    desk.load_state(state_path(world))
     desk.send()
-    for event in world.stream(after=history[-1]["seq"] if history else -1, idle=1.0):
-        day = desk.now // DAY
-        desk.now = world.client.final()["now"] if event is None else max(desk.now, event["at"])
-        if event is not None:
-            desk.handle(event)
-        desk.tick()
-        desk.send()
-        if desk.now // DAY > day:
-            report(WEEKDAYS[day % 7], world.score())
-        if desk.now >= snapshot["endsAt"]:
-            return
+    filled_at, clock_at, saved_at = None, time.monotonic(), time.monotonic()
+    try:
+        for event in world.stream(after=history[-1]["seq"] if history else -1, idle=SEND_EVERY):
+            day, real = desk.now // DAY, time.monotonic()
+            if event is not None:
+                desk.now = max(desk.now, event["at"])
+                desk.handle(event)
+            elif real - clock_at >= CLOCK_EVERY:
+                desk.now, clock_at = max(desk.now, clock()), real
+            desk.tick()
+            if desk.outbox and filled_at is None:
+                filled_at = real
+            if desk.outbox and (event is None or real - filled_at >= SEND_EVERY):
+                desk.send()
+                filled_at = None
+            if real - saved_at >= SAVE_EVERY:
+                desk.save_state(state_path(world))
+                saved_at = real
+            if desk.now // DAY > day:
+                report(WEEKDAYS[day % 7], world.score())
+            if desk.now >= snapshot["endsAt"]:
+                return
+    finally:
+        print(f"Quotes the world refused (mostly too late): {desk.refused_quotes}. Pairs posted: {desk.paired}.", flush=True)
+        desk.save_state(state_path(world))
+        with contextlib.suppress(SpreadError):  # after a broken connection the restart loop sends again
+            desk.send()
 
 
 def report(label: str, score: Score) -> None:

@@ -102,7 +102,7 @@ Point it at a reveal folder. It breaks the won orders down by option, day, ready
 
 **Which cars to take.** A request gets no winning quote when:
 
-- a leg's drive is longer than 3 hours (`max_drive_min`). At level 8, drives of 3–5 hours were late about 30% of the time and lost money on average;
+- a leg's drive is longer than 4 hours (`max_drive_min`). At 1.3× list, drives of 3–5 hours were late about 30% of the time and lost money; with learned prices, drives up to 4 hours pay;
 - the price we would get is below the typical driver fee (`min_price_fee_ratio`);
 - it is same-day and the drive leaves under four hours before the deadline (`same_day_slack_min`). From level 4 this applies only when same-day is the only option;
 - at levels 1 and 2, it is a trade-in (`no_trade_in_max_level`). A trade-in that never leaves costs twice its price;
@@ -124,7 +124,7 @@ Up to level 3 every quote wins, so a car is refused by sending no quote. From le
 |---|---|---|---|
 | 1 | spread-1 | €4,509 | 97.1% |
 | 2 | spread-1, setup-check, harness-3 | €4,600–5,600 | 97.1% |
-| 8 | tune-1 … tune-8 (current defaults) | €3,680–7,730, mean €6,125 | 95.6% (8 of 8 ranked) |
+| 8 | tune-1 … tune-8 (current defaults) | €4,035–8,526, mean €6,561 | 95.1% (8 of 8 ranked) |
 
 The starter loses €72,612 at level 8 on spread-1, at 45.5% on time. At level 8 we want at least 93% on every week for a safety margin; the next step is learning, during the week, which towns lack drivers.
 
@@ -141,4 +141,6 @@ Level 8 settings compared on the same 8 weeks:
 | + pairing within 50 km | 8 of 8 | 92.0% | €4,462 |
 | + quotes at 1.45× list instead of 1.3× | 8 of 8 | 92.6% | €5,769 |
 | same, quotes at 1.6× list | 8 of 8 | 94.9% | €5,358 (€8,226 in a dear week, €2,685 in a cheap one) |
-| **+ price learning per dealer and dealer trust, floor 1.3× (current default)** | **8 of 8** | **95.6%** | **€6,125** |
+| + price learning per dealer and dealer trust, floor 1.3× | 8 of 8 | 95.6% | €6,125 |
+| **+ drives up to 4 h instead of 3 h (current default)** | **8 of 8** | **95.1%** | **€6,561** |
+| same, but 15 waiting cars instead of 10 | 8 of 8 | 92.9% | €6,605 |

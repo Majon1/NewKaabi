@@ -54,7 +54,8 @@ class Params:
     price_max: float = 1.90
     trust: bool = True  # level 8: +1% on a dealer's prices for each order delivered to it on time, up to 25
     # Limits tuned for level 8's driver shortage; the same at every level, since only level 8 counts.
-    max_drive_min: int = 180  # decline when a leg's drive is longer than this (3-5 h drives: ~30% late at level 8)
+    # 240: with learned prices, 3-4 h drives pay (+7% margin on 8 level 8 weeks, worst week 95.1% on time).
+    max_drive_min: int = 240  # decline when a leg's drive is longer than this
     max_backlog: int = 10  # decline while this many won or likely-won orders have no driver
     min_price_fee_ratio: float = 1.0  # decline when our best price is below this many times the typical fee
     same_day_slack_min: int = 240  # decline tight same-day cars (see same_day_too_tight); 0 turns it off
